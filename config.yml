@@ -1,0 +1,16 @@
+tak_connection:
+  host: "10.0.10.2"
+  tls: 8093
+  udp: 8087
+  type: "tls" # tls / udp
+  no_tls_verify: 0 # 0 = Disabled / 1 = Enabled
+  cert_pem: "certs/beam.pem"
+  cert_key: "certs/beam.key"
+  password: "" # if no password, use empty string
+
+garmin_connection:
+  feed_url: "https://share.garmin.com/Feed/Share/account"
+  g_username: "username"
+  g_password: "password"
+  cot_type: "a-f-G-F-U"
+  cot_stale_time: 3600
