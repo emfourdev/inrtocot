@@ -37,4 +37,8 @@ It was created as a gap filler as the excellent In Reach To CoT Gateway develope
 - aiohttp~=3.10.5
 - pytak~=7.1.0
 - fastkml~=0.12
+<<<<<<< HEAD
 - lxml~=5.3.0
+=======
+- lxml~=5.3.0
+>>>>>>> inrtocot/main
