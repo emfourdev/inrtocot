@@ -49,15 +49,21 @@ class MySender(pytak.QueueWorker):
 
 
 async def fetch_kml_feed(url, username, password):
+
+    timeout = aiohttp.ClientTimeout(total=10)  # Set a 10-second timeout
     auth = aiohttp.BasicAuth(username, password)
-    async with aiohttp.ClientSession(auth=auth) as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                logging.info(f"KML Feed Successfully Fetched")
-                return await response.text()
-            else:
-                logging.error(f"Error fetching KML feed: {response.status}")
-                return None
+
+    async with aiohttp.ClientSession(auth=auth, timeout=timeout) as session:
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    logging.info(f"KML Feed Successfully Fetched")
+                    return await response.text()
+                else:
+                    logging.error(f"Error fetching KML feed: {response.status}")
+                    return None
+        except asyncio.TimeoutError:
+            print("The request timed out")
 
 
 def parse_kml(kml_data):
