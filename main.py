@@ -13,7 +13,7 @@ from config.config import AppConfig
 
 config = Config().get()
 app_config = AppConfig(config)
-
+queue = asyncio.Queue(maxsize=100)  # Increase the max size
 
 class MySender(pytak.QueueWorker):
     """
@@ -24,7 +24,10 @@ class MySender(pytak.QueueWorker):
     async def handle_data(self, data):
         """Handle pre-CoT data, serialize to CoT Event, then puts on queue."""
         event = data
-        await self.put_queue(event)
+        try:
+            await self.put_queue(event)
+        except asyncio.QueueFull:
+            logging.info("Dropped packet due to full queue")
 
     async def run(self, number_of_iterations=-1):
         """Run the loop for processing or generating pre-CoT data."""
@@ -124,8 +127,8 @@ def create_cot_event(placemarks):
         contact = etree.SubElement(detail, "contact")
         contact.set("callsign", placemark["name"])
 
-        remarks = etree.SubElement(detail, "remarks")
-        remarks.set("value", placemark["description"])
+        #remarks = etree.SubElement(detail, "remarks")
+        #remarks.set("value", placemark["description"])
 
         #return etree.tostring(cot_event, pretty_print=True)
         cot_events.append(etree.tostring(cot_event, pretty_print=True))
@@ -179,6 +182,7 @@ async def main():
             "PYTAK_TLS_CLIENT_CERT": app_config.cert_pem,
             "PYTAK_TLS_CLIENT_KEY": app_config.cert_key,
             "PYTAK_TLS_DONT_VERIFY": app_config.no_tls_verify,
+            "PYTAK_TLS_CLIENT_PASSWORD": app_config.password
         }
 
         pytak_config = pytak_config["mycottool"]
