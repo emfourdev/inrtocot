@@ -15,6 +15,7 @@ config = Config().get()
 app_config = AppConfig(config)
 queue = asyncio.Queue(maxsize=100)  # Increase the max size
 
+
 class MySender(pytak.QueueWorker):
     """
     Defines how you process or generate your Cursor-On-Target Events.
@@ -136,10 +137,6 @@ def create_cot_event(placemarks):
         contact = etree.SubElement(detail, "contact")
         contact.set("callsign", placemark["name"])
 
-        #remarks = etree.SubElement(detail, "remarks")
-        #remarks.set("value", placemark["description"])
-
-        #return etree.tostring(cot_event, pretty_print=True)
         cot_events.append(etree.tostring(cot_event, pretty_print=True))
     return cot_events
 
@@ -154,7 +151,6 @@ async def main():
     )
 
     # Import the configuration from the Config File
-
 
     # Check that the TAK Server is configured in the configuration file
     if app_config.tak_host is None:
