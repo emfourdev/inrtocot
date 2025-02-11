@@ -235,7 +235,7 @@ async def main():
             exit(1)
 
         taksock.close()
-
+        cot_url = None
         # Initializes worker queues and tasks.
         cot_url = pytak.CLITool(pytak_config)
         await cot_url.setup()
