@@ -51,22 +51,31 @@ class MySender(pytak.QueueWorker):
                 await asyncio.sleep(120)
 
 
-async def fetch_kml_feed(url, username, password):
-
+async def fetch_kml_feed(url, username, password, retries=3, delay=60):
+    """Fetch Garmin KML feed with retry mechanism."""
     timeout = aiohttp.ClientTimeout(total=10)  # Set a 10-second timeout
     auth = aiohttp.BasicAuth(username, password)
 
     async with aiohttp.ClientSession(auth=auth, timeout=timeout) as session:
-        try:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    logging.info(f"KML Feed Successfully Fetched")
-                    return await response.text()
-                else:
-                    logging.error(f"Error fetching KML feed: {response.status}")
-                    return None
-        except asyncio.TimeoutError:
-            print("The request timed out")
+        for attempt in range(retries):
+            try:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        logging.info("KML Feed Successfully Fetched")
+                        return await response.text()
+                    else:
+                        logging.error(f"Error fetching KML feed: {response.status}")
+            except asyncio.TimeoutError:
+                logging.warning(f"Attempt {attempt + 1} - The request timed out")
+            except aiohttp.ClientError as e:
+                logging.warning(f"Attempt {attempt + 1} - Client error: {e}")
+
+            if attempt < retries - 1:
+                logging.info(f"Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+
+    logging.error("Failed to fetch KML feed after multiple attempts")
+    return None
 
 
 def parse_kml(kml_data):
