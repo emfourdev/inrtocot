@@ -78,8 +78,20 @@ async def fetch_kml_feed(session, url, username, password, retries=3, delay=60):
         try:
             async with session.get(url, auth=auth) as response:
                 if response.status == 200:
+                    content = await response.text()
+
+                    # Check if content is empty
+                    if not content or content.isspace():
+                        logging.error("Received empty KML feed")
+                        return None
+
+                    # Validate that it's actually KML content
+                    if "<kml" not in content:
+                        logging.error("Received non-KML content")
+                        return None
+
                     logging.info("KML Feed Successfully Fetched")
-                    return await response.text()
+                    return content
                 elif response.status == 401:
                     logging.error("Unauthorized access (401). Check credentials.")
                     return None
