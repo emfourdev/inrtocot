@@ -7,10 +7,10 @@ from datetime import datetime
 from datetime import timedelta
 import socket
 import logging
-import sys
 from configparser import ConfigParser
 from config.config import Config
 from config.config import AppConfig
+from contextlib import asynccontextmanager
 
 config = Config().get()
 app_config = AppConfig(config)
@@ -32,56 +32,86 @@ class MySender(pytak.QueueWorker):
             logging.info("Dropped packet due to full queue")
 
     async def run(self, number_of_iterations=-1):
-        """Run the loop for processing or generating pre-CoT data."""
-        while 1:
+        while True:
+            try:
+                async with self.get_session() as session:
+                    kml_data = await fetch_kml_feed(
+                        session,
+                        app_config.garmin_url,
+                        app_config.g_username,
+                        app_config.g_password
+                    )
 
-            # Fetch Garmin KML feed
-            kml_data = await fetch_kml_feed(app_config.garmin_url, app_config.g_username, app_config.g_password)
-            if kml_data is None:
-                return
+                    if kml_data is None:
+                        await asyncio.sleep(60)  # Wait before retry
+                        continue
 
-            # Parse KML feed into placemarks
-            placemarks = parse_kml(kml_data)
-            if not placemarks:
-                logging.error("No placemarks found in KML feed.")
-                return
+                    placemarks = parse_kml(kml_data)
+                    if not placemarks:
+                        logging.error("No placemarks found in KML feed.")
+                        await asyncio.sleep(60)  # Wait before retry
+                        continue
 
-            data = create_cot_event(placemarks)
-            for event in data:
-                logging.info("Sending:\n%s\n", event.decode())
-                await self.handle_data(event)
-                await asyncio.sleep(120)
+                    data = create_cot_event(placemarks)
+                    for event in data:
+                        logging.info("Sending:\n%s\n", event.decode())
+                        await self.handle_data(event)
+                        await asyncio.sleep(120)
+
+            except Exception as e:
+                logging.error(f"Error in run loop: {e}")
+                await asyncio.sleep(60)  # Wait before retry
+
+    @asynccontextmanager
+    async def get_session(self):
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            yield session
 
 
-async def fetch_kml_feed(url, username, password, retries=3, delay=60):
+async def fetch_kml_feed(session, url, username, password, retries=3, delay=60):
     """Fetch Garmin KML feed with retry mechanism and shutdown on 401 error."""
     timeout = aiohttp.ClientTimeout(total=10)  # Set a 10-second timeout
     auth = aiohttp.BasicAuth(username, password)
 
-    async with aiohttp.ClientSession(auth=auth, timeout=timeout) as session:
-        for attempt in range(retries):
-            try:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        logging.info("KML Feed Successfully Fetched")
-                        return await response.text()
-                    elif response.status == 401:
-                        logging.error("Unauthorized access (401). Check credentials.")
-                        sys.exit("Shutting down due to authentication failure.")  # Immediate shutdown
-                    else:
-                        logging.error(f"Error fetching KML feed: HTTP {response.status}")
+    for attempt in range(retries):
+        try:
+            async with session.get(url, auth=auth) as response:
+                if response.status == 200:
+                    logging.info("KML Feed Successfully Fetched")
+                    return await response.text()
+                elif response.status == 401:
+                    logging.error("Unauthorized access (401). Check credentials.")
+                    return None
+                else:
+                    logging.error(f"Error fetching KML feed: HTTP {response.status}")
 
-            except asyncio.TimeoutError:
-                logging.warning(f"Attempt {attempt + 1} - The request timed out")
-            except aiohttp.ClientError as e:
-                logging.warning(f"Attempt {attempt + 1} - Client error: {e}")
-
+        except Exception as e:
+            logging.warning(f"Attempt {attempt + 1} - Error: {e}")
             if attempt < retries - 1:
                 logging.info(f"Retrying in {delay} seconds...")
                 await asyncio.sleep(delay)
 
     logging.error("Failed to fetch KML feed after multiple attempts")
-    sys.exit("Shutting down due to repeated failures.")
+    return None
+
+
+async def cleanup(cot_url):
+    try:
+        # Cancel all running tasks
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+
+        # Wait for all tasks to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Close the PyTAK connection properly
+        if hasattr(cot_url, 'cleanup'):
+            await cot_url.cleanup()
+
+    except Exception as e:
+        logging.error(f"Error during cleanup: {e}")
 
 
 def parse_kml(kml_data):
@@ -155,65 +185,77 @@ async def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    # Import the configuration from the Config File
+    try:
+        # Import the configuration from the Config File
 
-    # Check that the TAK Server is configured in the configuration file
-    if app_config.tak_host is None:
-        print(
-            "Missing TAK Server address in config (host:<address> in connection section)"
-        )
-        logging.error("Missing TAK Server address", exc_info=True)
-        exit(1)
+        # Check that the TAK Server is configured in the configuration file
+        if app_config.tak_host is None:
+            print(
+                "Missing TAK Server address in config (host:<address> in connection section)"
+            )
+            logging.error("Missing TAK Server address", exc_info=True)
+            exit(1)
 
-    # Determine whether we are using TLS or UDP
-    if app_config.tak_type == "tls":
-        tak_port = app_config.tak_tls
-    else:
-        tak_port = app_config.tak_udp
+        # Determine whether we are using TLS or UDP
+        if app_config.tak_type == "tls":
+            tak_port = app_config.tak_tls
+        else:
+            tak_port = app_config.tak_udp
 
-    # Check that TAK Server is responding
-    print("Check Connectivity")
-    print("==================")
-    taksock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Check that TAK Server is responding
+        print("Check Connectivity")
+        print("==================")
+        taksock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # Check that we can communicate with the TAK Server
-    if taksock.connect_ex((app_config.tak_host, tak_port)) == 0:
-        print("TAK Server Online: OK")
-        logging.info(f"TAK Server is Online")
-        logging.info(f"TAK Host: {app_config.tak_host} Port: {tak_port}")
+        # Check that we can communicate with the TAK Server
+        if taksock.connect_ex((app_config.tak_host, tak_port)) == 0:
+            print("TAK Server Online: OK")
+            logging.info(f"TAK Server is Online")
+            logging.info(f"TAK Host: {app_config.tak_host} Port: {tak_port}")
 
-        # Configure Streaming Connection to TAK Server
-        pytak_config = ConfigParser()
-        pytak_host = "tls://{tak_host}:{tak_port}".format(
-            tak_host=app_config.tak_host, tak_port=tak_port
-        )
-        pytak_config["mycottool"] = {
-            "COT_URL": pytak_host,
-            "PYTAK_TLS_CLIENT_CERT": app_config.cert_pem,
-            "PYTAK_TLS_CLIENT_KEY": app_config.cert_key,
-            "PYTAK_TLS_DONT_VERIFY": app_config.no_tls_verify,
-            "PYTAK_TLS_CLIENT_PASSWORD": app_config.password
-        }
+            # Configure Streaming Connection to TAK Server
+            pytak_config = ConfigParser()
+            pytak_host = "tls://{tak_host}:{tak_port}".format(
+                tak_host=app_config.tak_host, tak_port=tak_port
+            )
+            pytak_config["mycottool"] = {
+                "COT_URL": pytak_host,
+                "PYTAK_TLS_CLIENT_CERT": app_config.cert_pem,
+                "PYTAK_TLS_CLIENT_KEY": app_config.cert_key,
+                "PYTAK_TLS_DONT_VERIFY": app_config.no_tls_verify,
+                "PYTAK_TLS_CLIENT_PASSWORD": app_config.password
+            }
 
-        pytak_config = pytak_config["mycottool"]
-    else:
-        print("TAK Server Online: FAILED")
-        logging.error(f"TAK Server is Offline")
-        logging.error(f"TAK Host: {app_config.tak_host} Port: {tak_port}")
-        print("Exiting...")
-        exit(1)
+            pytak_config = pytak_config["mycottool"]
+        else:
+            print("TAK Server Online: FAILED")
+            logging.error(f"TAK Server is Offline")
+            logging.error(f"TAK Host: {app_config.tak_host} Port: {tak_port}")
+            print("Exiting...")
+            exit(1)
 
-    taksock.close()
+        taksock.close()
 
-    # Initializes worker queues and tasks.
-    cot_url = pytak.CLITool(pytak_config)
-    await cot_url.setup()
+        # Initializes worker queues and tasks.
+        cot_url = pytak.CLITool(pytak_config)
+        await cot_url.setup()
 
-    # Add your serializer to the asyncio task list.
-    cot_url.add_tasks(set([MySender(cot_url.tx_queue, pytak_config)]))
+        # Add your serializer to the asyncio task list.
+        cot_url.add_tasks(set([MySender(cot_url.tx_queue, pytak_config)]))
 
-    # Start all tasks and exit after sending the packets.
-    await cot_url.run()
+        # Start all tasks and exit after sending the packets.
+        await cot_url.run()
+
+    except Exception as e:
+        logging.error(f"Error in main: {e}")
+    finally:
+        if cot_url:
+            await cleanup(cot_url)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Received shutdown signal")
+    except Exception as e:
+        logging.error(f"Fatal error: {e}")
