@@ -7,6 +7,7 @@ from datetime import datetime
 from datetime import timedelta
 import socket
 import logging
+import sys
 from configparser import ConfigParser
 from config.config import Config
 from config.config import AppConfig
@@ -53,7 +54,7 @@ class MySender(pytak.QueueWorker):
 
 
 async def fetch_kml_feed(url, username, password, retries=3, delay=60):
-    """Fetch Garmin KML feed with retry mechanism."""
+    """Fetch Garmin KML feed with retry mechanism and shutdown on 401 error."""
     timeout = aiohttp.ClientTimeout(total=10)  # Set a 10-second timeout
     auth = aiohttp.BasicAuth(username, password)
 
@@ -64,8 +65,12 @@ async def fetch_kml_feed(url, username, password, retries=3, delay=60):
                     if response.status == 200:
                         logging.info("KML Feed Successfully Fetched")
                         return await response.text()
+                    elif response.status == 401:
+                        logging.error("Unauthorized access (401). Check credentials.")
+                        sys.exit("Shutting down due to authentication failure.")  # Immediate shutdown
                     else:
-                        logging.error(f"Error fetching KML feed: {response.status}")
+                        logging.error(f"Error fetching KML feed: HTTP {response.status}")
+
             except asyncio.TimeoutError:
                 logging.warning(f"Attempt {attempt + 1} - The request timed out")
             except aiohttp.ClientError as e:
@@ -76,7 +81,7 @@ async def fetch_kml_feed(url, username, password, retries=3, delay=60):
                 await asyncio.sleep(delay)
 
     logging.error("Failed to fetch KML feed after multiple attempts")
-    return None
+    sys.exit("Shutting down due to repeated failures.")
 
 
 def parse_kml(kml_data):
