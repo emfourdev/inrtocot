@@ -54,7 +54,19 @@ class MySender(pytak.QueueWorker):
 
                     data = create_cot_event(placemarks)
                     for event in data:
-                        logging.info("Sending:\n%s\n", event.decode())
+                        event_str = event.decode()  # Convert bytes to string
+                        logging.debug("Sending:\n%s\n", event_str)
+
+                        # Parse XML and extract callsign
+                        root = etree.fromstring(event)
+                        callsign = root.find(".//contact")  # Locate the <contact> element inside <detail>
+
+                        if callsign is not None and "callsign" in callsign.attrib:
+                            callsign_value = callsign.get("callsign")
+                        else:
+                            callsign_value = "Unknown"
+
+                        logging.info("Sending Placemark: %s\n", callsign_value)
                         await self.handle_data(event)
                         await asyncio.sleep(120)
 
