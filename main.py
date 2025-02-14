@@ -66,7 +66,7 @@ class MySender(pytak.QueueWorker):
                         else:
                             callsign_value = "Unknown"
 
-                        logging.info("Sending Placemark: %s\n", callsign_value)
+                        logging.info("Sending Placemark: %s", callsign_value)
                         await self.handle_data(event)
                         await asyncio.sleep(120)
 
