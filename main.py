@@ -7,6 +7,8 @@ from datetime import datetime
 from datetime import timedelta
 import socket
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 from configparser import ConfigParser
 from config.config import Config
 from config.config import AppConfig
@@ -16,6 +18,45 @@ config = Config().get()
 app_config = AppConfig(config)
 queue = asyncio.Queue(maxsize=100)  # Increase the max size
 
+def setup_logging():
+    """Configure logging with rotation"""
+    # Create logs directory if it doesn't exist
+    log_dir = "logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    log_file = os.path.join(log_dir, "inrtocot.log")
+
+    # Configure the rotating file handler
+    # Max size of 5MB, keep 5 backup files
+    handler = RotatingFileHandler(
+        filename=log_file,
+        maxBytes=5 * 1024 * 1024,  # 5 MB
+        backupCount=5,
+        mode='a'  # append mode
+    )
+
+    # Set the format for log messages
+    formatter = logging.Formatter(
+        '%(asctime)s %(levelname)s %(message)s'
+    )
+    handler.setFormatter(formatter)
+
+    # Get the root logger and set its level
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # Remove any existing handlers to avoid duplicate logs
+    for existing_handler in logger.handlers[:]:
+        logger.removeHandler(existing_handler)
+
+    # Add our rotating handler
+    logger.addHandler(handler)
+
+    # Optionally add console output
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 class MySender(pytak.QueueWorker):
     """
@@ -202,12 +243,9 @@ def create_cot_event(placemarks):
 
 async def main():
 
-    logging.basicConfig(
-        level=logging.INFO,
-        filename="inrtocot.log",
-        filemode="w",
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    # Set up rotating logs
+    setup_logging()
+
     cot_url = None
     try:
         # Import the configuration from the Config File
